@@ -6,7 +6,7 @@ use etherparse::{NetHeaders, PacketHeaders, TransportHeader};
 use pcap_parser::traits::PcapReaderIterator;
 use pcap_parser::{LegacyPcapReader, PcapBlockOwned, PcapError};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 pub struct Flow {
     pub src_ip: IpAddr,
     pub src_port: u16,

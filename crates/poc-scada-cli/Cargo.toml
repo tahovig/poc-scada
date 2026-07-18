@@ -1,0 +1,12 @@
+[package]
+name = "poc-scada-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "poc-scada"
+path = "src/main.rs"
+
+[dependencies]
+poc-scada-core = { path = "../poc-scada-core" }
+clap = { version = "4", features = ["derive"] }

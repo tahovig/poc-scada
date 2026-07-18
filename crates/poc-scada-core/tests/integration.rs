@@ -1,31 +1,19 @@
 use std::path::{Path, PathBuf};
 
 use etherparse::PacketBuilder;
-use poc_scada::detections::{self, SelectBeforeOperateTracker};
-use poc_scada::dnp3;
-use poc_scada::pcap;
+use poc_scada_core::detections::Finding;
 
 fn fixture(relative: &str) -> PathBuf {
+    // Repo root's data/ dir, two levels up from this crate.
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
+        .join("../../data")
         .join(relative)
 }
 
-fn findings_for(path: &Path) -> Vec<detections::Finding> {
-    let packets = pcap::read_pcap(path).expect("fixture should parse");
-    let mut findings = Vec::new();
-    let mut tracker = SelectBeforeOperateTracker::default();
-    for packet in &packets {
-        for msg in dnp3::find_dnp3_messages(&packet.payload) {
-            findings.extend(detections::check_dangerous_function_code(
-                &msg,
-                packet.flow,
-                packet.ts_sec,
-            ));
-            findings.extend(tracker.check(&msg, packet.flow, packet.ts_sec));
-        }
-    }
-    findings
+fn findings_for(path: &Path) -> Vec<Finding> {
+    poc_scada_core::analyze_pcap(path)
+        .expect("fixture should parse")
+        .findings
 }
 
 fn assert_rule_fires(path: &Path, rule: &str) {

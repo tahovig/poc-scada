@@ -4,7 +4,7 @@ pub mod transport;
 
 pub use application::FunctionCode;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Dnp3Message {
     pub dest: u16,
     pub src: u16,
