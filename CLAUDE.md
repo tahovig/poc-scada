@@ -1,0 +1,44 @@
+# Project: poc-scada (formerly scaffolded as `dpi-dnp3`)
+
+## Goal
+
+Third in a series of portfolio projects supporting a career pivot from software engineering to cybersecurity engineering (first: `poc-osint`, at `~/dev-projects/tah-osint-poc`; second: `poc-logids`, at `~/dev-projects/poc-logids`). A DNP3 protocol deep-packet-inspection (DPI) tool — analyzes captured SCADA/ICS network traffic (pcap files) and flags security-relevant patterns. Built around the user's professional background in critical infrastructure protection (energy generation/transmission/distribution, EMS) — the first project in the series where that specific domain expertise is the headline, not a footnote.
+
+## Origin
+
+Started independently by the user in late May/early June 2026 as `dpi-dnp3`. That repo's GitHub remote was never actually created — local commits existed with `origin` configured to point at `github.com/tahovig/dpi-dnp3`, but `git ls-remote`/`gh repo view` both confirmed nothing existed server-side (local `git status` reporting "up to date with origin" was just stale tracking metadata, not a live check). Picked back up and formalized from within the `poc-logids` session on 2026-07-18: since the old remote never existed, a fresh repo was created directly as `poc-scada` and the existing local commits pushed into it (rather than a true GitHub-side rename). Branch strategy applied (`main` + `develop`, matching `poc-osint`/`poc-logids`), local directory renamed from `dpi-dnp3` to `poc-scada` to match.
+
+This was flagged as a stretch-goal candidate during `poc-logids`'s own data-source discussion (see that project's CLAUDE.md, "DNP3/ICS-SCADA" note) — DNP3/ICS analysis was set aside there specifically because `poc-logids` is deliberately log-based, not packet-capture-based, and DNP3 analysis is overwhelmingly a pcap-native discipline. Neither side knew about the other at the time: the `poc-logids` note assumed this would be a fresh idea, when the user had already independently started exactly this a month and a half earlier. This project is where it gets to be the headline.
+
+## Decided so far
+
+- **Type: pcap-native, offline/batch analysis of already-captured DNP3 traffic — not live packet capture.** Unlike `poc-logids` (which has a real live target: an internet-facing SSH honeypot), there's no equivalent live ICS network to tap here, so no live-tail/`-follow` analog is planned — scope is analyzing static pcap files. This also sidesteps the packet-capture privilege/environment concerns that ruled out live capture for `poc-logids` in the first place (root/`CAP_NET_RAW`, WSL2 networking) — nothing here needs elevated privileges or a live NIC, only file I/O over pcaps that already exist.
+- **Git LFS already configured for `*.pcap` files** (carried over from the original `dpi-dnp3` commits, `.gitattributes`) — sensible as-is; pcaps can be large binary files that shouldn't bloat regular git history.
+- **Language: Rust**, decided 2026-07-18. Confirmed over Python for the memory-safety-in-binary-parsing narrative described below. Installed via `rustup` (wasn't present on the machine) — stable toolchain, `~/.cargo/bin` on `PATH` after sourcing `~/.cargo/env`.
+- **Future UI layer planned, not yet started.** The user wants a visualization on top of this Rust backend eventually — conceptually an animation/diagram of traffic flow between source and destination systems. No framework/approach decided; flagged so a future session doesn't scope the backend as if it's the whole project. Revisit once v1 detections are solid.
+- **Detection scope for v1, decided 2026-07-18: both candidate checks**, implemented and passing against real fixture data:
+  - Dangerous function codes: Cold Restart (13), Warm Restart (14), Direct Operate (5), Direct Operate No Ack (6).
+  - Select-before-operate violations: an Operate (4) not immediately preceded by a Select (3) from the same DNP3 src/dest pair. (Direct Operate is intentionally *not* double-counted here — it bypasses select by design and is already caught by the dangerous-function-code check.)
+- **Data source, decided 2026-07-18** after hands-on verification of two candidates (see below): **ITI `ICS-Security-Tools` DNP3 pcap collection is primary**, 4SICS is background noise only.
+  - `github.com/ITI/ICS-Security-Tools/tree/master/pcaps/dnp3` — ~27 small, purpose-built, per-function-code pcaps (one function per file: `cold_restart_and_response.pcap`, `select_operate_and_responses.pcap`, `directoperate_and_response.pcap`, etc.). Verified by hand-decoding link/transport/application-layer bytes (no DNP3 crate exists, so this was done by directly parsing the frame structure) — filenames match actual frame contents. This is the primary source for both detections. Mirrored into `data/dnp3-iti/`.
+  - Netresec's 4SICS Geek Lounge captures were checked **and mostly rejected**: of the three public files, one (`151020`) has zero DNP3 traffic (dominated by S7comm), one (`151021`) has port-20000 traffic that's actually scanner noise (Oracle TNS `CONNECT_DATA`, raw HTTP `GET /`), and only the third (`151022`) has genuine DNP3 frames — but just 36 "Request Link Status" link-layer probes with zero application-layer payload (no Select/Operate/Restart anywhere). Not usable as a detection-validation source. An 8,000-packet prefix of `151022` is kept in `data/4sics/` purely as a "realistic non-DNP3-heavy background" regression fixture (asserted to produce zero findings), not as DNP3 signal. Full verification methodology and rationale in `data/README.md`.
+- **Project structure, testing, CI, decided 2026-07-18:**
+  - `src/lib.rs` exposes `pcap`, `dnp3` (`link`/`transport`/`application` submodules), and `detections` (one module per check) as a library; `src/main.rs` is a thin `clap`-based CLI over it. Library/binary split exists so `tests/integration.rs` can exercise the real parsing+detection path against fixture files.
+  - Pcap reading: `pcap-parser` (pure Rust, no libpcap dependency — fits the offline/no-elevated-privileges framing). L2–L4 unwrapping: `etherparse`. DNP3 itself is hand-rolled (link/transport/application layers) — no mature Rust DNP3 crate exists, and this was the planned differentiator anyway.
+  - Tests: unit tests colocated per module (parser edge cases, detection logic in isolation) plus `tests/integration.rs` running the full pcap → dnp3 → detections pipeline against the real fixtures in `data/`, including a synthetic in-memory pcap (built with `etherparse::PacketBuilder`, no fixture file needed) for the one violation pattern (bare Operate) that doesn't naturally occur in either public dataset.
+  - CI: GitHub Actions (`.github/workflows/ci.yml`), matching `poc-logids`'s shape — `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo build`, `cargo test`. Checkout step uses `lfs: true` since fixtures are LFS-tracked.
+  - `cargo clippy -- -D warnings` and `cargo fmt` both clean as of the initial scaffold; 24 tests passing (16 unit + 8 integration).
+
+## Next steps
+
+- Actually push this scaffold — current state is local commits only (mirroring the same "verify before assuming" lesson from this project's own origin story above).
+- Consider whether the two v1 detections need refinement once more traffic patterns are explored (e.g. `direct_operate_crob_malform_but_good_crc.pcap` and `operate_aggressive_mode.pcap` in the ITI set are unexplored edge cases).
+- Future UI layer (see "Decided so far") — no scoping conversation had yet.
+
+## Working preferences (carried over from `poc-osint`/`poc-logids`)
+
+- User prefers concise, direct communication — minimal explanation, no unnecessary verbosity.
+- User is comfortable with CLI workflows.
+- User wants critical, fact-checked pushback grounded in analysis/logic, not agreement-seeking or validation — verify claims (including your own) rather than assuming they hold.
+- User values terminal/ASCII visualizations for tool output where applicable.
+- User prefers to be asked before scope/data-source/cost decisions, but is fine with reversible technical implementation choices being made and stated directly rather than asked each time.

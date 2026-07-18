@@ -1,0 +1,17 @@
+# Build artifacts
+/target/
+
+# Environment variables / secrets
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings (machine-specific, not shared)
+.claude/settings.local.json
