@@ -97,6 +97,16 @@ investigation rather than being obvious upfront:
   support the two detections; object-header/payload parsing and multi-frame
   transport reassembly across TCP segments are intentionally out of scope
   for v1 (see doc comments in `dnp3/transport.rs`).
+- **Parsing and pcap reading are both zero-copy/streaming**, not because it's
+  needed for the fixture-sized pcaps used here, but because it's the honest
+  way to write a DPI tool: `LinkFrame` borrows from the original packet
+  bytes instead of allocating per frame, and `pcap::read_pcap` decodes one
+  packet at a time as an iterator instead of reading the whole capture into
+  memory before analysis starts — a multi-hour real SCADA capture shouldn't
+  need to fit twice in RAM just to be scanned once. See `CLAUDE.md`'s
+  "algorithmic/complexity refactor tangent" entry for the detail on what
+  changed and why (including where the design deliberately still
+  allocates, and why that's fine).
 - **Tauri v1, not v2.** Tauri v2 requires `webkit2gtk-4.1`, which doesn't
   exist in this project's Ubuntu 20.04 dev environment's repos at all (not a
   config issue — the package genuinely isn't published for that release).

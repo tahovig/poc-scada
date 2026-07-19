@@ -12,31 +12,34 @@ pub struct Dnp3Message {
 }
 
 /// Scans a TCP/UDP payload for DNP3 link frames and decodes each into a
-/// `Dnp3Message`. Non-DNP3 bytes (scanner probes, other protocols sharing
-/// port 20000, etc.) are skipped by sliding forward one byte at a time
-/// until the next `0x05 0x64` sync pattern.
-pub fn find_dnp3_messages(payload: &[u8]) -> Vec<Dnp3Message> {
-    let mut messages = Vec::new();
+/// `Dnp3Message`, lazily. Non-DNP3 bytes (scanner probes, other protocols
+/// sharing port 20000, etc.) are skipped by sliding forward one byte at a
+/// time until the next `0x05 0x64` sync pattern.
+pub fn find_dnp3_messages(payload: &[u8]) -> impl Iterator<Item = Dnp3Message> + '_ {
     let mut offset = 0;
 
-    while offset < payload.len() {
-        if let Some(frame) = link::parse_link_frame(&payload[offset..]) {
+    std::iter::from_fn(move || {
+        while offset < payload.len() {
+            let Some(frame) = link::parse_link_frame(&payload[offset..]) else {
+                offset += 1;
+                continue;
+            };
+            offset += frame.consumed.max(1);
+
             if let Some(segment) = transport::parse_transport_segment(&frame)
                 && let Some(header) = application::parse_application_header(segment.app_data)
             {
-                messages.push(Dnp3Message {
+                return Some(Dnp3Message {
                     dest: frame.dest,
                     src: frame.src,
                     function: header.function,
                 });
             }
-            offset += frame.consumed.max(1);
-        } else {
-            offset += 1;
+            // Valid link frame, but no usable application message inside
+            // (e.g. a link-status probe with no payload) — keep scanning.
         }
-    }
-
-    messages
+        None
+    })
 }
 
 #[cfg(test)]
@@ -52,7 +55,7 @@ mod tests {
         let mut payload = b"GET / HTTP/1.0\r\n\r\n".to_vec();
         payload.extend_from_slice(&cold_restart_frame);
 
-        let messages = find_dnp3_messages(&payload);
+        let messages: Vec<_> = find_dnp3_messages(&payload).collect();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].function, FunctionCode::ColdRestart);
         assert_eq!(messages[0].dest, 10);
@@ -61,6 +64,6 @@ mod tests {
 
     #[test]
     fn no_sync_bytes_returns_empty() {
-        assert!(find_dnp3_messages(b"not dnp3 at all").is_empty());
+        assert!(find_dnp3_messages(b"not dnp3 at all").next().is_none());
     }
 }
