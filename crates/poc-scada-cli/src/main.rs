@@ -3,10 +3,6 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use poc_scada::detections::{self, Finding, SelectBeforeOperateTracker};
-use poc_scada::dnp3;
-use poc_scada::pcap;
-
 /// DNP3 protocol deep-packet-inspection tool: analyzes captured SCADA/ICS
 /// network traffic (pcap files) and flags security-relevant patterns.
 #[derive(Parser)]
@@ -27,19 +23,18 @@ fn main() -> ExitCode {
         println!("file: {}", path.display());
         println!("{}", "-".repeat(60));
 
-        let packets = match pcap::read_pcap(path) {
-            Ok(packets) => packets,
+        let report = match poc_scada_core::analyze_pcap(path) {
+            Ok(report) => report,
             Err(e) => {
                 eprintln!("error reading {}: {e}", path.display());
                 return ExitCode::FAILURE;
             }
         };
 
-        let findings = analyze(&packets);
-        if findings.is_empty() {
+        if report.findings.is_empty() {
             println!("  no findings");
         } else {
-            for finding in &findings {
+            for finding in &report.findings {
                 println!(
                     "  [!] {:<32} t={:<10} {:<24} {}",
                     finding.rule, finding.ts_sec, finding.flow, finding.message
@@ -48,10 +43,10 @@ fn main() -> ExitCode {
         }
         println!(
             "\n{} packet(s) analyzed, {} finding(s)\n",
-            packets.len(),
-            findings.len()
+            report.packet_count,
+            report.findings.len()
         );
-        total_findings += findings.len();
+        total_findings += report.findings.len();
     }
 
     println!("{}", "=".repeat(60));
@@ -61,24 +56,4 @@ fn main() -> ExitCode {
     );
 
     ExitCode::SUCCESS
-}
-
-fn analyze(packets: &[pcap::Packet]) -> Vec<Finding> {
-    let mut findings = Vec::new();
-    let mut select_operate_tracker = SelectBeforeOperateTracker::default();
-
-    for packet in packets {
-        for msg in dnp3::find_dnp3_messages(&packet.payload) {
-            if let Some(finding) =
-                detections::check_dangerous_function_code(&msg, packet.flow, packet.ts_sec)
-            {
-                findings.push(finding);
-            }
-            if let Some(finding) = select_operate_tracker.check(&msg, packet.flow, packet.ts_sec) {
-                findings.push(finding);
-            }
-        }
-    }
-
-    findings
 }

@@ -1,0 +1,103 @@
+Flaw 1: O(N) Space Allocation
+
+Look closely at this line: let mut user_data = Vec::with_capacity(user_data_len);
+
+In the context of DPI, heap allocation is the enemy. For every packet, you are calling the system allocator. If this tool scales to gigabit line rates, memory fragmentation, allocator locks, and CPU cache thrashing will choke the pipeline. DNP3 makes zero-copy parsing difficult because it maliciously interleaves a 2-byte CRC every 16 bytes of payload. The instinct was to copy the data to create a contiguous buffer.
+
+The Correction: We achieve O(1) space complexity by storing a reference (&'a [u8]) to the raw payload including the CRCs, and providing a zero-copy, lazy iterator to the higher layers. The transport layer doesn't need a contiguous Vec; it just needs a sequence of bytes.
+
+
+Flaw 2: O(N) Time Bounds Checking
+
+Look at the extraction loop: if data.len() < crc_end { return None; }
+
+We are checking bounds on every 16-byte iteration. This prevents LLVM from unrolling the loop or vectorizing operations.
+
+The Correction: DNP3 explicitly defines the frame size in its header (data[2]). We can calculate the exact required byte length of the frame in O(1) time before the loop even starts. If the frame is valid, we take a single slice. No loop bounds checking required.
+
+
+Refactored Code:
+
+const START1: u8 = 0x05;
+const START2: u8 = 0x64;
+const HEADER_LEN: usize = 10;
+const MAX_USER_DATA_BLOCK: usize = 16;
+
+#[derive(Debug, Clone)]
+pub struct LinkFrame<'a> {
+    pub control: u8,
+    pub dest: u16,
+    pub src: u16,
+    /// The exact subset of `data` representing the payload chunks AND their CRCs.
+    raw_payload: &'a [u8],
+    /// The true logical length of the user data (excluding CRCs).
+    pub user_data_len: usize,
+    /// Total bytes this frame consumed from the ring buffer.
+    pub consumed: usize,
+}
+
+impl<'a> LinkFrame<'a> {
+    /// Returns a zero-copy iterator over the 16-byte payload chunks,
+    /// transparently skipping the 2-byte CRCs.
+    pub fn user_data_chunks(&self) -> impl Iterator<Item = &'a [u8]> {
+        let mut remaining = self.user_data_len;
+        let mut offset = 0;
+        let payload = self.raw_payload;
+
+        std::iter::from_fn(move || {
+            if remaining == 0 {
+                return None;
+            }
+            let chunk_len = remaining.min(MAX_USER_DATA_BLOCK);
+            
+            // Slice the chunk directly from the raw payload
+            let chunk = &payload[offset..offset + chunk_len];
+            
+            // Advance the offset past this chunk AND its 2-byte CRC
+            offset += chunk_len + 2;
+            remaining -= chunk_len;
+            
+            Some(chunk)
+        })
+    }
+}
+
+pub fn parse_link_frame(data: &[u8]) -> Option<LinkFrame> {
+    // 1. O(1) Header bounds check
+    if data.len() < HEADER_LEN || data[0] != START1 || data[1] != START2 {
+        return None;
+    }
+
+    let link_len = data[2] as usize;
+    if link_len < 5 {
+        return None;
+    }
+    let user_data_len = link_len - 5;
+
+    // 2. O(1) Exact frame geometry calculation
+    // Calculate total CRC bytes: 2 bytes for every 16 bytes of data (ceiling division)
+    let crc_count = (user_data_len + MAX_USER_DATA_BLOCK - 1) / MAX_USER_DATA_BLOCK;
+    let payload_bytes_with_crcs = user_data_len + (crc_count * 2);
+    let total_frame_len = HEADER_LEN + payload_bytes_with_crcs;
+
+    // 3. O(1) Final bounds check
+    if data.len() < total_frame_len {
+        return None; 
+    }
+
+    let control = data[3];
+    let dest = u16::from_le_bytes([data[4], data[5]]);
+    let src = u16::from_le_bytes([data[6], data[7]]);
+
+    // 4. Zero-copy binding
+    let raw_payload = &data[HEADER_LEN..total_frame_len];
+
+    Some(LinkFrame {
+        control,
+        dest,
+        src,
+        raw_payload,
+        user_data_len,
+        consumed: total_frame_len,
+    })
+}

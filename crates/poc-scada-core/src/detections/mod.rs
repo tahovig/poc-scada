@@ -6,7 +6,7 @@ pub use select_before_operate::SelectBeforeOperateTracker;
 
 use crate::pcap::Flow;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Finding {
     pub rule: &'static str,
     pub message: String,

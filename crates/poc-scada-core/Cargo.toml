@@ -1,0 +1,13 @@
+[package]
+name = "poc-scada-core"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "poc_scada_core"
+path = "src/lib.rs"
+
+[dependencies]
+pcap-parser = { version = "0.17", features = ["data"] }
+etherparse = "0.20"
+serde = { version = "1", features = ["derive"] }
