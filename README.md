@@ -56,25 +56,46 @@ for exactly what each fixture contains and how it was verified.
 
 A Tauri desktop UI was prototyped on top of this backend and abandoned — see
 `CLAUDE.md` for why. Current direction is a richer terminal/ASCII
-presentation instead (see "Next steps" there), in keeping with this
-project's CLI-first style.
+presentation instead, in keeping with this project's CLI-first style:
+findings are colored by rule (red for dangerous function codes, yellow for
+select-before-operate violations) on a real terminal — a markdown code
+block can't show that, so the examples above/below are the plain-text form
+piped output also gets — and a spinner runs while a file is being analyzed.
+Both are skipped automatically for non-terminal output (piped, redirected,
+CI logs), same policy `poc-logids` uses.
 
 ## Usage
 
 ```
 cargo build --release -p poc-scada-cli
-./target/release/poc-scada <PCAP_FILE> [PCAP_FILE ...]
+./target/release/poc-scada <PCAP_FILE> [PCAP_FILE ...] [--group-by-rule]
 ```
 
 Multiple pcap files can be passed at once; each is reported separately, with
-a combined total at the end. There are no flags to tune yet — both
-detections always run.
+a combined total at the end. Both detections always run — there's no flag
+to disable either. `--group-by-rule` switches the findings list from
+chronological order to grouped-by-rule (each rule as a heading with its
+matching findings underneath); default stays chronological.
 
 ## How it works
 
 A few decisions worth calling out, since they came from real
 investigation rather than being obvious upfront:
 
+- **The spinner is "still working" feedback, not a per-packet progress
+  bar.** `analyze_pcap` doesn't report progress as it runs — the spinner
+  (`crates/poc-scada-cli/src/spinner.rs`) just ticks on a background thread
+  for as long as the call is in flight, joined the moment it returns. A real
+  progress bar would need `analyze_pcap` itself to expose incremental
+  progress, which isn't worth the API surface for what's still a batch CLI
+  tool, and would cut against the same lesson the Tauri attempt taught:
+  don't add motion/pacing that isn't earning its keep.
+- **Rule colors are a deliberate two-tier split, not an arbitrary palette.**
+  Dangerous function codes (Cold/Warm Restart, Direct Operate) are red
+  because they're direct, disruptive control actions; select-before-operate
+  violations are yellow because they're a real protocol-safety violation
+  but not themselves an active disruptive command. See
+  `crates/poc-scada-cli/src/color.rs`.
 - **DNP3 parsing is hand-rolled**, not from a crate — no mature Rust DNP3
   parser exists. `crates/poc-scada-core/src/dnp3/` implements just enough of
   the link, transport, and application layers (start bytes,
@@ -128,6 +149,9 @@ investigation rather than being obvious upfront:
   - `tests/integration.rs` — runs that pipeline against the fixtures in
     `data/`
 - `crates/poc-scada-cli/` — the `clap`-based CLI (binary name `poc-scada`)
+  - `src/main.rs` — arg parsing, the per-file report loop
+  - `src/color.rs` — ANSI rule coloring, skipped for non-terminal output
+  - `src/spinner.rs` — the "still working" spinner around each file's analysis
 - `data/dnp3-iti/` — primary detection fixtures (one DNP3 function per file)
 - `data/4sics/` — background-noise fixture, LFS-tracked like all `*.pcap`
 
