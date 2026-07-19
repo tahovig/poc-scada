@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/poc-scada-core",
     "crates/poc-scada-cli",
-    "src-tauri",
 ]
 
 [workspace.package]

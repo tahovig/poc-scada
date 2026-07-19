@@ -54,42 +54,48 @@ handshake/ACK/teardown packets are correctly excluded. Point it at a real
 multi-hour SCADA capture and the count scales accordingly. See `data/README.md`
 for exactly what each fixture contains and how it was verified.
 
-A desktop UI (Tauri) now sits on top of the same Rust backend: pick a pcap
-file, and it replays every DNP3 message as an animated packet flying between
-labeled source/destination address nodes, red for anything a detection
-flagged, alongside the same findings table the CLI prints. Both front ends
-call the exact same `poc_scada_core::analyze_pcap` function, so they can't
-drift out of sync with each other.
+A Tauri desktop UI was prototyped on top of this backend and abandoned — see
+`CLAUDE.md` for why. Current direction is a richer terminal/ASCII
+presentation instead, in keeping with this project's CLI-first style:
+findings are colored by rule (red for dangerous function codes, yellow for
+select-before-operate violations) on a real terminal — a markdown code
+block can't show that, so the examples above/below are the plain-text form
+piped output also gets — and a spinner runs while a file is being analyzed.
+Both are skipped automatically for non-terminal output (piped, redirected,
+CI logs), same policy `poc-logids` uses.
 
 ## Usage
 
-CLI:
-
 ```
 cargo build --release -p poc-scada-cli
-./target/release/poc-scada <PCAP_FILE> [PCAP_FILE ...]
+./target/release/poc-scada <PCAP_FILE> [PCAP_FILE ...] [--group-by-rule]
 ```
 
 Multiple pcap files can be passed at once; each is reported separately, with
-a combined total at the end. There are no flags to tune yet — both
-detections always run.
-
-Desktop app (from the repo root — see "How it works" for why that matters):
-
-```
-cargo tauri dev
-```
-
-Requires Node.js (`ui/` is a Vite + vanilla TypeScript project) and, on
-Linux, `webkit2gtk-4.0`/`libgtk-3`/`libayatana-appindicator3` dev packages —
-see `CLAUDE.md` for the exact `apt` line and why it's `4.0` and not the
-`4.1` Tauri v2 wants.
+a combined total at the end. Both detections always run — there's no flag
+to disable either. `--group-by-rule` switches the findings list from
+chronological order to grouped-by-rule (each rule as a heading with its
+matching findings underneath); default stays chronological.
 
 ## How it works
 
 A few decisions worth calling out, since they came from real
 investigation rather than being obvious upfront:
 
+- **The spinner is "still working" feedback, not a per-packet progress
+  bar.** `analyze_pcap` doesn't report progress as it runs — the spinner
+  (`crates/poc-scada-cli/src/spinner.rs`) just ticks on a background thread
+  for as long as the call is in flight, joined the moment it returns. A real
+  progress bar would need `analyze_pcap` itself to expose incremental
+  progress, which isn't worth the API surface for what's still a batch CLI
+  tool, and would cut against the same lesson the Tauri attempt taught:
+  don't add motion/pacing that isn't earning its keep.
+- **Rule colors are a deliberate two-tier split, not an arbitrary palette.**
+  Dangerous function codes (Cold/Warm Restart, Direct Operate) are red
+  because they're direct, disruptive control actions; select-before-operate
+  violations are yellow because they're a real protocol-safety violation
+  but not themselves an active disruptive command. See
+  `crates/poc-scada-cli/src/color.rs`.
 - **DNP3 parsing is hand-rolled**, not from a crate — no mature Rust DNP3
   parser exists. `crates/poc-scada-core/src/dnp3/` implements just enough of
   the link, transport, and application layers (start bytes,
@@ -107,30 +113,6 @@ investigation rather than being obvious upfront:
   "algorithmic/complexity refactor tangent" entry for the detail on what
   changed and why (including where the design deliberately still
   allocates, and why that's fine).
-- **Tauri v1, not v2.** Tauri v2 requires `webkit2gtk-4.1`, which doesn't
-  exist in this project's Ubuntu 20.04 dev environment's repos at all (not a
-  config issue — the package genuinely isn't published for that release).
-  v1 uses `webkit2gtk-4.0`, which is available, at the cost of using an
-  older/less-actively-developed major version.
-- **`cargo tauri dev` must be run from the repo root**, not from
-  `src-tauri/`. `beforeDevCommand`/`beforeBuildCommand` in
-  `src-tauri/tauri.conf.json` run with the CWD of wherever `cargo tauri` was
-  invoked from (unlike `devPath`/`distDir`, which are relative to
-  `tauri.conf.json` itself) — they're set to `npm --prefix ui run ...`
-  specifically because the repo root is the intended invocation point.
-- **`tauri.conf.json`'s `productName` must not collide with a Cargo binary
-  name elsewhere in the workspace.** `cargo tauri dev` copies the compiled
-  app to a path derived from `productName`, not the Cargo package/bin name —
-  it was originally set to `"poc-scada"`, silently overwriting the CLI's
-  compiled binary (same name, `crates/poc-scada-cli`'s `[[bin]] name`) on
-  every dev run. Renamed to `"poc-scada-desktop"` to make the two
-  unambiguous.
-- **`src-tauri/Cargo.toml` can't use `version.workspace = true` /
-  `edition = "2024"`.** `tauri-build`'s manifest parser (`cargo_toml` 0.15.3)
-  doesn't resolve Cargo's workspace-inheritance syntax and doesn't recognize
-  the `"2024"` edition string (too new for that dependency's release) —
-  both are hardcoded in that one crate's manifest instead, safe since
-  editions can differ per-crate within a workspace.
 - **The public 4SICS ICS Lab dataset was checked and mostly rejected** as a
   detection-validation source. Of Netresec's three public 4SICS captures,
   one has zero DNP3 traffic (dominated by S7comm), one has port-20000
@@ -157,44 +139,30 @@ investigation rather than being obvious upfront:
 
 ## Repo structure
 
-Cargo workspace with three members, plus a separate npm project for the
-desktop app's frontend:
-
-- `crates/poc-scada-core/` — the actual DPI logic, as a library. No CLI or
-  GUI dependencies, so both front ends can depend on it without pulling in
-  the other's dependency tree.
+- `crates/poc-scada-core/` — the DPI logic, as a library
   - `src/pcap.rs` — reads legacy `.pcap` files and unwraps Ethernet/IP/TCP/UDP
     down to the raw payload (`pcap-parser` + `etherparse`)
   - `src/dnp3/` — hand-rolled DNP3 link/transport/application-layer parsing
   - `src/detections/` — one module per detection (`dangerous_function_code`,
     `select_before_operate`)
-  - `src/lib.rs` — `analyze_pcap`, the shared pipeline both front ends call
+  - `src/lib.rs` — `analyze_pcap`, the shared analysis pipeline
   - `tests/integration.rs` — runs that pipeline against the fixtures in
     `data/`
 - `crates/poc-scada-cli/` — the `clap`-based CLI (binary name `poc-scada`)
-- `src-tauri/` — the Tauri v1 desktop app backend; one `#[tauri::command]`
-  (`analyze_pcap`) exposing `poc-scada-core`'s report as JSON over IPC
-- `ui/` — the desktop app's frontend: Vite + vanilla TypeScript, no
-  framework. `src/animation.ts` renders the source/destination flow diagram
-  (plain SVG + `<animateMotion>`, no charting library); `src/main.ts` wires
-  up the file picker, findings table, and playback.
+  - `src/main.rs` — arg parsing, the per-file report loop
+  - `src/color.rs` — ANSI rule coloring, skipped for non-terminal output
+  - `src/spinner.rs` — the "still working" spinner around each file's analysis
 - `data/dnp3-iti/` — primary detection fixtures (one DNP3 function per file)
 - `data/4sics/` — background-noise fixture, LFS-tracked like all `*.pcap`
 
 ## Tech stack
 
-**Rust** for the core — chosen deliberately over the faster-to-ramp-up
-Python/`scapy` option: parsing untrusted, potentially malformed binary
-protocol data from a pcap is exactly the class of problem where
-memory-corruption bugs are a realistic risk in C/C++, and where Rust's
-safety guarantees are a genuine differentiator for a security-tooling
-portfolio piece. Offline/batch pcap analysis only, no live capture — unlike
-`poc-logids`'s SSH honeypot, there's no equivalent live ICS network to tap
-here, and this also sidesteps the packet-capture privilege requirements
-(root/`CAP_NET_RAW`) live capture would need.
-
-**Tauri v1** for the desktop shell — reuses the Rust backend directly over
-IPC rather than standing up an HTTP API, and packages as a real native app
-rather than requiring a browser. See "How it works" above for the v1-vs-v2
-and environment-specific gotchas hit getting it running. See `CLAUDE.md` for
-full design notes and rationale.
+Rust — chosen deliberately over the faster-to-ramp-up Python/`scapy` option:
+parsing untrusted, potentially malformed binary protocol data from a pcap is
+exactly the class of problem where memory-corruption bugs are a realistic
+risk in C/C++, and where Rust's safety guarantees are a genuine
+differentiator for a security-tooling portfolio piece. Offline/batch pcap
+analysis only, no live capture — unlike `poc-logids`'s SSH honeypot, there's
+no equivalent live ICS network to tap here, and this also sidesteps the
+packet-capture privilege requirements (root/`CAP_NET_RAW`) live capture
+would need. See `CLAUDE.md` for full design notes and rationale.
