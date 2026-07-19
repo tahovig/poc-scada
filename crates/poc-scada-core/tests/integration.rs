@@ -67,6 +67,31 @@ fn direct_operate_no_ack_fixture_flags_dangerous_function_code() {
 }
 
 #[test]
+fn direct_operate_with_malformed_crob_still_flags_dangerous_function_code() {
+    // The malformed CROB object payload doesn't matter to this detection:
+    // the function code lives in the first 3 bytes of user data (transport
+    // header, app control, function), well before any object-header/payload
+    // bytes we don't parse. A malformed object shouldn't be able to hide a
+    // dangerous function code from us.
+    assert_rule_fires(
+        &fixture("dnp3-iti/direct_operate_crob_malform_but_good_crc.pcap"),
+        "dangerous-function-code",
+    );
+}
+
+#[test]
+fn direct_operate_aggressive_mode_still_flags_dangerous_function_code() {
+    // DNP3 Secure Authentication's aggressive mode appends a MAC directly
+    // after the object data in the same application fragment. Same
+    // reasoning as the malformed-CROB case above: the function code is read
+    // long before that trailer, so it shouldn't affect detection.
+    assert_rule_fires(
+        &fixture("dnp3-iti/operate_aggressive_mode.pcap"),
+        "dangerous-function-code",
+    );
+}
+
+#[test]
 fn select_then_operate_fixture_has_no_findings() {
     assert_no_findings(&fixture("dnp3-iti/select_operate_and_responses.pcap"));
 }
