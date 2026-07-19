@@ -25,14 +25,22 @@ pub struct AnalysisReport {
 /// Runs the full pipeline — read pcap, extract DNP3 messages, run both
 /// detections — shared by the CLI and the Tauri desktop app so the two
 /// front ends can't drift out of sync with each other.
+///
+/// Packets are streamed one at a time from `pcap::read_pcap` rather than
+/// the whole file being materialized first: only the current packet (and
+/// the `messages`/`findings` accumulated so far, which the caller needs as
+/// output regardless) are ever held in memory at once, not every packet in
+/// the capture simultaneously.
 pub fn analyze_pcap(path: &Path) -> Result<AnalysisReport, pcap::Error> {
-    let packets = pcap::read_pcap(path)?;
-
+    let mut packet_count = 0usize;
     let mut messages = Vec::new();
     let mut findings = Vec::new();
     let mut select_operate_tracker = detections::SelectBeforeOperateTracker::default();
 
-    for packet in &packets {
+    for packet in pcap::read_pcap(path)? {
+        let packet = packet?;
+        packet_count += 1;
+
         for message in dnp3::find_dnp3_messages(&packet.payload) {
             findings.extend(detections::check_dangerous_function_code(
                 &message,
@@ -51,7 +59,7 @@ pub fn analyze_pcap(path: &Path) -> Result<AnalysisReport, pcap::Error> {
 
     Ok(AnalysisReport {
         file: path.display().to_string(),
-        packet_count: packets.len(),
+        packet_count,
         messages,
         findings,
     })
