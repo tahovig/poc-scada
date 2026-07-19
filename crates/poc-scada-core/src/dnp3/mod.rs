@@ -21,7 +21,7 @@ pub fn find_dnp3_messages(payload: &[u8]) -> Vec<Dnp3Message> {
 
     while offset < payload.len() {
         if let Some(frame) = link::parse_link_frame(&payload[offset..]) {
-            if let Some(segment) = transport::parse_transport_segment(&frame.user_data)
+            if let Some(segment) = transport::parse_transport_segment(&frame)
                 && let Some(header) = application::parse_application_header(segment.app_data)
             {
                 messages.push(Dnp3Message {
