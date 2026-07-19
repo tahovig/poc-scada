@@ -64,9 +64,37 @@ way (see below) if a specific attack category/subset is needed later.
   doesn't). Running `poc-scada` against `slave.pcap` correctly produces
   **78 findings**, all `dangerous-function-code`, with correct
   timestamps/flows/DNP3 addressing — real confirmation against labeled
-  attack traffic, not just this project's own synthetic fixtures. No
-  `Select`/`Operate` traffic appears anywhere in this dataset, so it doesn't
-  exercise `select-before-operate-violation`.
+  attack traffic, not just this project's own synthetic fixtures.
+
+**`select-before-operate-violation` isn't exercised anywhere in this
+dataset.** After `dangerous-function-code` validated cleanly against
+`injection/`, the natural next question was whether this large real-world
+dataset could validate the other detection too. It can't: `Select`(3) and
+`Operate`(4) function codes were checked for and never found in *any* of
+the 6 attack categories (Control, Injection, Replay, MITM, Flooding,
+Masquerading — Replay/MITM checked at both `frequent`/`infrequent`
+granularity, given `frequent` was where `injection/`'s attack activity
+concentrated). That consistency across capture sessions spanning three
+different calendar months (Jul/Aug/Sep 2016) points to this being a
+property of the underlying testbed — it apparently never generates a
+select-then-operate control sequence, using direct write/freeze/restart
+actions instead — rather than something attack-category-specific worth
+digging into further. As a side effect, this sweep also confirmed none of
+Replay/MITM/Flooding/Masquerading exercise `dangerous-function-code` either
+(Flooding shows heavy `ImmediateFreeze`/`Write` flooding, consistent with
+its name, but nothing in this project's dangerous-function-code list) — so
+across the whole dataset, only `injection/` triggers either current
+detection; the other five categories are all negative controls. Only
+`Control` is kept as a fixture for that story — the other four were
+inspected (function-code tallies only, not committed) and would add
+redundant "no findings" coverage at real additional LFS storage cost, so
+they're documented here rather than kept as files.
+
+`select-before-operate-violation` coverage instead comes from
+`dnp3-iti/select_operate_and_responses.pcap` (the legitimate select-then-operate
+case) and `dnp3-iti/directoperate_and_response.pcap` (the bypass case), plus
+a synthetic bare-Operate case in `tests/integration.rs` — real DNP3 bytes
+either way, just not from this dataset.
 
 Not wired into `tests/integration.rs` — these are multi-hundred-MB,
 multi-second-to-analyze real-world captures, appropriate for manual
